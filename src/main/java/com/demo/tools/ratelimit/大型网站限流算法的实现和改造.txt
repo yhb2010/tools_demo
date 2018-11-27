@@ -1,0 +1,107 @@
+分析之前
+	依我个人的理解来说限流的话应该灵活到可以针对每一个接口来做。比如说一个类里面有5个接口，那么我的限流插件就应该能针对每一个接口就行不同的限流方案。所以呢，既然针对的每个接口所以就需要一个可以唯一标示这个接口的key（我取的是类名+方法名+入参）。
+	分布式限流强烈推荐使用redis+lua或者nginx+lua来实现。
+这里用2个限流条件来做示例讲一下常见的限流算法：
+	接口1它10秒钟最大允许访问100次
+	接口2它10秒钟最大允许每个人访问100次。
+计数器算法
+	这个算法可以说是限流算法中最简单的一种算法了。
+核心思想
+	计数器算法的意思呢就是当接口在一个时间单位中被访问时，我就记下来访问次数，直到它访问的次数到达上限。
+涉及变量
+	接口（key）
+	时间单位（expire）
+	允许访问多少次（limit）
+	访问次数（value）
+条件一
+	当一个请求过来时，我们就会得到这个key。
+	if(存在key){
+	   value++;
+	   if(value>=limit){
+	           不能访问
+	       }
+	   }else{
+	       添加key，value为1
+	       设置key过期时间为expire
+	}
+条件二
+	既然条件一已经实现了，那条件二会复杂么 ？
+	相比于条件一来说就是同一个key对应了多个用户。那么我们只需要把key加上用户的信息就可以了。比如说 key_用户1、key_用户2。
+
+漏桶算法
+核心思想
+	漏桶算法的意思呢就是一个接口在一个时间单位中允许被访问次数是动态变化的（假如一分钟允许访问60次，那么从开始计时时不管有没有被访问第59秒只允许访问59次，30秒只允许30次）。为什么这样呢，因为有另外一个线程在进行递减操作
+涉及变量
+	接口（key）
+	时间单位（expire）
+	允许访问多少次（limit）
+	递减间隔时间（interval）
+	递减步长（step）
+	剩余可访问次数（value）
+	key的访问时间（lastUpdateTime）
+	当前时间（nowTime）（注意nowTime的取值应为应用取得的时间而不是redis或者nginx取得的时间）
+条件一
+	线程一：
+	if(存在key){
+	   value--；
+	   if(value<=0){
+	           不能访问
+	       }
+	   }else{
+	       添加key，设置value为limit
+	}
+线程二：
+	while(过去interval时间){
+		所有key的value-step
+	}
+条件二
+	参考计数器算法条件二实现。
+算法升级
+	可以看到实现漏桶算法的话需要每隔interval时间都要另外一条线程去遍历所key的value去做递减操作，那么有没有什么办法可以省略这一步呢。答案是肯定有。
+	if(存在key){
+	   value--；
+	   if（（nowTime-lastUpdateTime）> interval）{
+	       value=value-（nowTime-lastUpdateTime）/interval*step;
+	       lastUpdateTime=nowTime;
+	   }
+	   if(value<=0){
+	           不能访问
+		}
+	   }else{
+	       添加key，设置value为limit；
+	       lastUpdateTime=nowTime；
+	}
+
+令牌桶算法
+核心思想
+	令牌桶算法呢，恰恰是和漏桶算法相反的一个算法，不过还是推荐你使用这个。这个算法的原理我不讲，我觉得聪明的你看了伪代码就明白了。
+涉及变量
+	接口（key）
+	时间单位（expire）
+	允许访问多少次（limit）
+	递增间隔时间（interval）
+	递增步长（step）
+	当前可访问次数（value）
+	key的访问时间（lastUpdateTime）
+	当前时间（nowTime）（参照漏桶算法需要注意的点）
+条件一
+	线程一：
+	if(存在key){
+	   value++；
+	   if(value>=limit){
+	           不能访问
+	       }
+	   }else{
+	       添加key，设置value为limit
+	   }
+	线程二：
+	while(过去interval时间){
+	   所有key的value+step
+	   }
+条件二
+	参考计算器算法条件二实现。
+算法升级
+	参考漏桶算法升级实现。
+代码
+代码实现请参考我的限流框架（点击下方阅读原文直达）：
+https://github.com/2388386839/syj-ratelimit
